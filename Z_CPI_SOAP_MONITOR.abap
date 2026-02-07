@@ -268,7 +268,7 @@ CLASS lcl_monitor IMPLEMENTATION.
       WHERE name = 'Z_SOAP_ALERT_MAIL' AND type = 'P'.
 
     IF lv_email IS INITIAL.
-      lv_email = 'harsh.sharma@sbdinc.com'.
+      lv_email = ''.
     ENDIF.
 
     TRY.
