@@ -10,9 +10,12 @@ CLASS lcl_monitor DEFINITION.
 
   PRIVATE SECTION.
     TYPES: BEGIN OF ty_logical_port,
-             logical_port TYPE srt_lp-lp_name,
-             service_name TYPE srt_lp-service_name,
-             endpoint_url TYPE string,
+             logical_port TYPE srt_cfg_cli_asgn-lp_name,
+             service_name TYPE srt_cfg_cli_asgn-proxy_class,
+             protocol     TYPE srt_cfg_cli_asgn-protocol,
+             host         TYPE srt_cfg_cli_asgn-host,
+             port         TYPE srt_cfg_cli_asgn-port,
+             url          TYPE srt_cfg_cli_asgn-url,
            END OF ty_logical_port.
 
     DATA: mt_ports TYPE TABLE OF ty_logical_port.
@@ -53,9 +56,10 @@ CLASS lcl_monitor IMPLEMENTATION.
             lv_result TYPE string,
             lv_prev   TYPE bal_s_msg-msgty,
             lv_curr   TYPE bal_s_msg-msgty.
-
+      ls_port-url = ls_port-protocol && '://' && ls_port-host && ':' && ls_port-port && ls_port-url.
+      CONDENSE ls_port-url NO-GAPS.
       ping_endpoint(
-        EXPORTING iv_url    = ls_port-endpoint_url
+        EXPORTING iv_url    = ls_port-url
         IMPORTING ev_status = lv_status
                   ev_error  = lv_error ).
 
@@ -87,13 +91,14 @@ CLASS lcl_monitor IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD get_cpi_logical_ports.
-    SELECT lp~lp_name AS logical_port,
-           lp~service_name,
-           url~url AS endpoint_url
-      FROM srt_lp AS lp
-      INNER JOIN srt_lp_url AS url ON lp~lp_name = url~lp_name
-      WHERE url~url LIKE '%hana.ondemand.com%'
-      INTO CORRESPONDING FIELDS OF TABLE @mt_ports.
+    SELECT lp_name,
+           proxy_class,
+           protocol,
+           host,
+           port,
+           url
+    FROM srt_cfg_cli_asgn
+    INTO TABLE @mt_ports.
   ENDMETHOD.
 
   METHOD ping_endpoint.
@@ -162,10 +167,10 @@ CLASS lcl_monitor IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD log_to_bal.
-    DATA: ls_log      TYPE bal_s_log,
-          lv_handle   TYPE balloghndl,
-          ls_msg      TYPE bal_s_msg,
-          lt_handles  TYPE bal_t_logh.
+    DATA: ls_log     TYPE bal_s_log,
+          lv_handle  TYPE balloghndl,
+          ls_msg     TYPE bal_s_msg,
+          lt_handles TYPE bal_t_logh.
 
     ls_log-object    = 'ZCPI_MON'.
     ls_log-subobject = 'SOAP_CONN'.
@@ -194,7 +199,7 @@ CLASS lcl_monitor IMPLEMENTATION.
     CASE iv_result.
       WHEN 'OK'.        ls_msg-msgty = 'S'.
       WHEN 'AUTH'.      ls_msg-msgty = 'W'.
-      WHEN 'CPI_ERROR'. ls_msg-msgty = 'E'.
+      WHEN 'ERROR'.     ls_msg-msgty = 'E'.
       WHEN 'DOWN'.      ls_msg-msgty = 'A'.
       WHEN OTHERS.      ls_msg-msgty = 'I'.
     ENDCASE.
@@ -221,11 +226,12 @@ CLASS lcl_monitor IMPLEMENTATION.
           ls_sub        TYPE bal_s_sub,
           lt_hdr        TYPE balhdr_t,
           ls_hdr        TYPE balhdr,
-          lt_msgs       TYPE bal_t_mscl,
-          ls_msg        TYPE bal_mscl,
+          lt_msg_handle TYPE bal_t_msgh,
+          ls_msg_handle TYPE balmsghndl,
+          ls_msg        TYPE bal_s_msg,
           lt_log_header TYPE balhdr_t.
 
-    ls_obj-sign = 'I'. ls_obj-option = 'EQ'. ls_obj-low = 'ZCPI_MON'.
+    ls_obj-sign = 'I'. ls_obj-option = 'EQ'. ls_obj-low = 'ZSOA_MON'.
     APPEND ls_obj TO ls_filter-object.
     ls_sub-sign = 'I'. ls_sub-option = 'EQ'. ls_sub-low = 'SOAP_CONN'.
     APPEND ls_sub TO ls_filter-subobject.
@@ -247,24 +253,37 @@ CLASS lcl_monitor IMPLEMENTATION.
       RETURN.
     ENDIF.
 
-    SORT lt_hdr BY aldate DESC altime DESC.
-
     LOOP AT lt_hdr INTO ls_hdr.
-      REFRESH: lt_log_header, lt_msgs.
+      REFRESH: lt_log_header.
       APPEND ls_hdr TO lt_log_header.
 
       CALL FUNCTION 'BAL_DB_LOAD'
         EXPORTING
           i_t_log_header = lt_log_header
         IMPORTING
-          e_t_msg        = lt_msgs
+          e_t_msg_handle = lt_msg_handle
         EXCEPTIONS
           OTHERS         = 1.
 
       IF sy-subrc = 0.
-        LOOP AT lt_msgs INTO ls_msg WHERE msgv1 = iv_lp_name.
-          rv_prev_sev = ls_msg-msgty.
-          RETURN.
+        LOOP AT lt_msg_handle INTO ls_msg_handle.
+          "get the message by reading through the log
+          CALL FUNCTION 'BAL_LOG_MSG_READ'
+            EXPORTING
+              i_s_msg_handle = ls_msg_handle
+            IMPORTING
+              e_s_msg        = ls_msg
+            EXCEPTIONS
+              log_not_found  = 1
+              msg_not_found  = 2
+              OTHERS         = 3.
+          IF sy-subrc = 0.
+            IF ls_msg-msgv1 = iv_lp_name.
+              rv_prev_sev = ls_msg-msgty.
+              RETURN.
+            ENDIF.
+          ENDIF.
+
         ENDLOOP.
       ENDIF.
     ENDLOOP.
@@ -278,22 +297,22 @@ CLASS lcl_monitor IMPLEMENTATION.
           lv_email        TYPE ad_smtpadr,
           lv_subject      TYPE so_obj_des.
 
-    SELECT SINGLE value FROM tvarvc INTO @lv_email
-      WHERE name = 'Z_CPI_ALERT_MAIL' AND type = 'P'.
+    SELECT SINGLE low FROM tvarvc INTO @lv_email
+      WHERE name = 'Z_SOAP_ALERT_MAIL' AND type = 'P'.
 
     IF lv_email IS INITIAL.
-      lv_email = 'cpi-integration-alerts@company.com'.
+      lv_email = ''.
     ENDIF.
 
     TRY.
-        lo_send_request = cl_bcs=>create_persistence( ).
+        lo_send_request = cl_bcs=>create_persistent( ).
         lv_subject = |CPI Alert: { is_port-logical_port } - { iv_result }|.
 
         APPEND |CPI Connectivity Alert| TO lt_body.
         APPEND |----------------------| TO lt_body.
         APPEND |Logical Port: { is_port-logical_port }| TO lt_body.
         APPEND |Service Name: { is_port-service_name }| TO lt_body.
-        APPEND |Endpoint:     { is_port-endpoint_url }| TO lt_body.
+        APPEND |Endpoint:     { is_port-url }| TO lt_body.
         APPEND |Result:       { iv_result }| TO lt_body.
         APPEND |HTTP Status:  { iv_status }| TO lt_body.
         APPEND |Error:        { iv_error }| TO lt_body.
