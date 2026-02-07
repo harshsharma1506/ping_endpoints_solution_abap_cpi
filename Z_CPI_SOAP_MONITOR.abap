@@ -22,7 +22,8 @@ CLASS lcl_monitor DEFINITION.
 
     METHODS get_cpi_logical_ports.
     METHODS ping_endpoint
-      IMPORTING iv_url    TYPE string
+      IMPORTING iv_class  TYPE srt_cfg_cli_asgn-proxy_class
+                iv_lp     TYPE srt_cfg_cli_asgn-lp_name
       EXPORTING ev_status TYPE i
                 ev_error  TYPE string.
     METHODS classify_result
@@ -56,10 +57,10 @@ CLASS lcl_monitor IMPLEMENTATION.
             lv_result TYPE string,
             lv_prev   TYPE bal_s_msg-msgty,
             lv_curr   TYPE bal_s_msg-msgty.
-      ls_port-url = ls_port-protocol && '://' && ls_port-host && ':' && ls_port-port && ls_port-url.
-      CONDENSE ls_port-url NO-GAPS.
+
       ping_endpoint(
-        EXPORTING iv_url    = ls_port-url
+        EXPORTING iv_lp    = ls_port-logical_port
+                  iv_class = ls_port-service_name
         IMPORTING ev_status = lv_status
                   ev_error  = lv_error ).
 
@@ -80,7 +81,7 @@ CLASS lcl_monitor IMPLEMENTATION.
         WHEN 'DOWN'.      lv_curr = 'A'.
       ENDCASE.
 
-      IF lv_prev = 'S' AND ( lv_curr = 'E' OR lv_curr = 'A' ).
+      IF ( lv_prev = 'S' OR lv_prev = ' ' ) AND ( lv_curr = 'E' OR lv_curr = 'A' ).
         send_alert_mail(
           is_port   = ls_port
           iv_result = lv_result
@@ -98,69 +99,32 @@ CLASS lcl_monitor IMPLEMENTATION.
            port,
            url
     FROM srt_cfg_cli_asgn
-    INTO TABLE @mt_ports.
+      INTO TABLE @mt_ports.
   ENDMETHOD.
 
   METHOD ping_endpoint.
-    DATA: lo_client TYPE REF TO if_http_client.
+    DATA: lx_config  TYPE REF TO cx_srt_wsp_assign_config,
+          lx_config2 TYPE REF TO cx_srt_wsp_config.
 
-    cl_http_client=>create_by_url(
-      EXPORTING
-        url    = iv_url
-      IMPORTING
-        client = lo_client
-      EXCEPTIONS
-        argument_not_found = 1
-        plugin_not_active  = 2
-        internal_error     = 3
-        OTHERS             = 4 ).
-
-    IF sy-subrc <> 0.
-      ev_status = 0.
-      ev_error  = 'Error creating HTTP client'.
-      RETURN.
-    ENDIF.
-
-    lo_client->send(
-      EXCEPTIONS
-        http_communication_failure = 1
-        http_invalid_state         = 2
-        http_processing_failed     = 3
-        http_invalid_timeout       = 4
-        OTHERS                     = 5 ).
-
-    IF sy-subrc <> 0.
-      lo_client->get_last_error( IMPORTING message = ev_error ).
-      ev_status = 0.
-      lo_client->close( ).
-      RETURN.
-    ENDIF.
-
-    lo_client->receive(
-      EXCEPTIONS
-        http_communication_failure = 1
-        http_invalid_state         = 2
-        http_processing_failed     = 3
-        OTHERS                     = 4 ).
-
-    IF sy-subrc <> 0.
-      lo_client->get_last_error( IMPORTING message = ev_error ).
-      ev_status = 0.
-      lo_client->close( ).
-      RETURN.
-    ENDIF.
-
-    lo_client->response->get_status( IMPORTING code = ev_status ).
-    lo_client->close( ).
+    TRY.
+        cl_srt_wsp_ws_admin_manager=>ping(
+        i_consumer_name = iv_class
+        i_lp_name       = iv_lp
+        ).
+        ev_status = 200.
+        ev_error = 'Ping Successful!!'.
+      CATCH cx_srt_wsp_assign_config INTO lx_config.
+        ev_error = lx_config->get_text( ).
+        ev_status = 500.
+      CATCH cx_srt_wsp_config INTO lx_config2.
+        ev_error = lx_config2->get_text( ).
+        ev_status = 500.
+    ENDTRY.
   ENDMETHOD.
 
   METHOD classify_result.
     IF iv_status = 200.
       rv_result = 'OK'.
-    ELSEIF iv_status = 401 OR iv_status = 403.
-      rv_result = 'AUTH'.
-    ELSEIF iv_status >= 500.
-      rv_result = 'CPI_ERROR'.
     ELSE.
       rv_result = 'DOWN'.
     ENDIF.
@@ -172,7 +136,7 @@ CLASS lcl_monitor IMPLEMENTATION.
           ls_msg     TYPE bal_s_msg,
           lt_handles TYPE bal_t_logh.
 
-    ls_log-object    = 'ZCPI_MON'.
+    ls_log-object    = 'ZSOA_MON'.
     ls_log-subobject = 'SOAP_CONN'.
     ls_log-aluser    = sy-uname.
     ls_log-alprog    = sy-repid.
@@ -218,6 +182,9 @@ CLASS lcl_monitor IMPLEMENTATION.
         i_t_log_handle = lt_handles
       EXCEPTIONS
         OTHERS         = 1.
+
+    COMMIT WORK.
+
   ENDMETHOD.
 
   METHOD read_previous_state.
@@ -301,7 +268,7 @@ CLASS lcl_monitor IMPLEMENTATION.
       WHERE name = 'Z_SOAP_ALERT_MAIL' AND type = 'P'.
 
     IF lv_email IS INITIAL.
-      lv_email = ''.
+      lv_email = 'harsh.sharma@sbdinc.com'.
     ENDIF.
 
     TRY.
