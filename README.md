@@ -1,9 +1,9 @@
-# CPI Integration Health Monitor & Dashboard
+# API Integration Health Monitor & Dashboard
 
-A comprehensive SAP ABAP solution for proactive monitoring and diagnostic visualization of SAP Cloud Platform Integration (CPI) SOAP connectivity.
+A comprehensive SAP ABAP solution for proactive monitoring and diagnostic visualization of SAP SOAP connectivity.
 
 ## Business Case
-In modern enterprise landscapes, SAP CPI serves as the backbone for critical data exchanges. Any disruption in CPI connectivity directly impacts business operations, leading to delayed orders, incomplete financial records, and operational bottlenecks. Traditional monitoring often relies on manual checks or reactive incident reports. This solution provides a proactive mechanism to detect, alert, and visualize connectivity health, ensuring minimal downtime and high system reliability.
+In modern enterprise landscapes, SAP SOAP serves as the backbone for critical data exchanges. Any disruption in connectivity directly impacts business operations, leading to delayed orders, incomplete financial records, and operational bottlenecks. Traditional monitoring often relies on manual checks or reactive incident reports. This solution provides a proactive mechanism to detect, alert, and visualize connectivity health, ensuring minimal downtime and high system reliability.
 
 ## Use Case
 *   **Proactive Connectivity Checks:** Automatically verify the reachability and configuration of CPI endpoints at regular intervals.
@@ -22,7 +22,7 @@ The solution is built entirely using standard SAP ABAP technologies to ensure co
 
 *   **Discovery Engine:** Dynamically identifies CPI logical ports by querying `srt_cfg_cli_asgn` for endpoints containing `hana.ondemand.com`.
 *   **Monitoring Core:** Utilizes `cl_srt_wsp_ws_admin_manager=>ping` to perform real-time connectivity tests.
-*   **Persistence Layer:** Uses the **SAP Application Log (BAL)** (Object: `ZCPI_MON`, Subobject: `SOAP_CONN`) to store historical health data.
+*   **Persistence Layer:** Uses the **SAP Application Log (BAL)** (Object: `ZAPI_MON`, Subobject: `SOAP_CONN`) to store historical health data.
 *   **Analytics Engine:** Processes historical BAL data in memory using optimized search algorithms to determine trends and last successful timestamps.
 *   **UI Layer:** Provides a user-friendly selection screen and a high-performance **ALV Dashboard** (`CL_SALV_TABLE`) with visual status indicators (traffic lights).
 *   **Notification Layer:** Integrated with **SAP Business Communication Services (BCS)** for automated email dispatching, with recipients managed via `TVARVC`.
