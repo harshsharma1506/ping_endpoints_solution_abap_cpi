@@ -21,14 +21,14 @@ CLASS lcl_integration_health DEFINITION.
 
     TYPES: BEGIN OF ty_dashboard_out,
              light        TYPE c LENGTH 1,
+             trend        TYPE string,
+             status       TYPE ty_status_text,
              service      TYPE srt_cfg_cli_asgn-proxy_class,
              logical_port TYPE srt_cfg_cli_asgn-lp_name,
              protocol     TYPE srt_cfg_cli_asgn-protocol,
              host         TYPE srt_cfg_cli_asgn-host,
              endpoint     TYPE string,
-             status       TYPE ty_status_text,
              last_ok      TYPE string,
-             trend        TYPE string,
              last_check   TYPE string,
            END OF ty_dashboard_out.
 
@@ -183,14 +183,25 @@ CLASS lcl_integration_health IMPLEMENTATION.
 
   METHOD log_to_bal.
     DATA: ls_msg     TYPE bal_s_msg,
-          lt_handles TYPE bal_t_logh.
+          lt_handles TYPE bal_t_logh,
+          lv_offset TYPE i.
 
+    DATA(lv_len) = strlen( iv_error ).
+    FIND FIRST OCCURRENCE OF '(' IN iv_error MATCH OFFSET lv_offset.
+    DATA(lv_rem) = lv_len - lv_offset.
     ls_msg-msgid = '00'.
     ls_msg-msgno = '001'.
     ls_msg-msgv1 = is_port-lp_name.
-    ls_msg-msgv2 = iv_result.
-    ls_msg-msgv3 = |Status: { iv_status }|.
-    ls_msg-msgv4 = iv_error.
+    ls_msg-msgv2 = is_port-service_name.
+    ls_msg-msgv3 = | Status: { iv_status } |.
+    IF lv_len > 15.
+    IF lv_rem > 50.
+     lv_rem = 50.
+    ENDIF.
+    ls_msg-msgv4 = iv_error+lv_offset(lv_rem).
+    ELSE.
+      ls_msg-msgv4 = iv_error.
+    ENDIF.
 
     CASE iv_result.
       WHEN 'OK'.              ls_msg-msgty = 'S'.
@@ -274,7 +285,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
               msg_not_found  = 2
               OTHERS         = 3.
           IF sy-subrc = 0.
-            IF ls_msg-msgv1 = iv_lp_name.
+            IF ls_msg-msgv1 CS iv_lp_name.
               rv_prev_sev = ls_msg-msgty.
               RETURN.
             ENDIF.
@@ -401,9 +412,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
 
       ls_out-trend = map_trend( iv_latest = lv_latest_sev iv_prev = lv_prev_sev ).
 
-      IF ls_out-status IN s_stat.
-        APPEND ls_out TO mt_dashboard_out.
-      ENDIF.
+      APPEND ls_out TO mt_dashboard_out.
     ENDLOOP.
 
     display_alv( ).
