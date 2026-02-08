@@ -311,6 +311,11 @@ CLASS lcl_integration_health IMPLEMENTATION.
 
     SORT lt_msg_full BY lp_name ASC datum DESC uzeit DESC.
 
+    DATA: lv_latest_sev TYPE symsgty,
+          lv_prev_sev   TYPE symsgty,
+          lv_found      TYPE abap_bool,
+          lv_index      TYPE i.
+
     LOOP AT mt_ports INTO DATA(ls_port).
       DATA(ls_out) = VALUE ty_dashboard_out(
         service      = ls_port-service_name
@@ -319,33 +324,41 @@ CLASS lcl_integration_health IMPLEMENTATION.
         status       = 'UNKNOWN'
         light        = '2' ).
 
-      DATA: lv_latest_sev TYPE symsgty,
-            lv_prev_sev   TYPE symsgty,
-            lv_found      TYPE abap_bool.
+      CLEAR: lv_latest_sev, lv_prev_sev, lv_found.
 
-      LOOP AT lt_msg_full INTO DATA(ls_m) WHERE lp_name = ls_port-lp_name.
-        IF lv_found = abap_false.
-          lv_latest_sev = ls_m-msgty.
-          ls_out-status = ls_m-result.
-          ls_out-last_check = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
-          lv_found = abap_true.
-          CASE ls_m-msgty.
-            WHEN 'S'. ls_out-light = '3'. " Green
-            WHEN OTHERS. ls_out-light = '1'. " Red
-          ENDCASE.
-        ELSEIF lv_prev_sev IS INITIAL.
-          lv_prev_sev = ls_m-msgty.
-        ENDIF.
+      " Optimized lookup in sorted history table
+      READ TABLE lt_msg_full WITH KEY lp_name = ls_port-lp_name
+           BINARY SEARCH TRANSPORTING NO FIELDS.
+      IF sy-subrc = 0.
+        lv_index = sy-tabix.
+        LOOP AT lt_msg_full INTO DATA(ls_m) FROM lv_index.
+          IF ls_m-lp_name <> ls_port-lp_name.
+            EXIT.
+          ENDIF.
 
-        IF ls_m-msgty = 'S' AND ls_out-last_ok IS INITIAL.
-          ls_out-last_ok = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
-        ENDIF.
+          IF lv_found = abap_false.
+            lv_latest_sev = ls_m-msgty.
+            ls_out-status = ls_m-result.
+            ls_out-last_check = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
+            lv_found = abap_true.
+            CASE ls_m-msgty.
+              WHEN 'S'. ls_out-light = '3'. " Green
+              WHEN OTHERS. ls_out-light = '1'. " Red
+            ENDCASE.
+          ELSEIF lv_prev_sev IS INITIAL.
+            lv_prev_sev = ls_m-msgty.
+          ENDIF.
 
-        " Once we have latest, previous (for trend) and last_ok, we can stop for this port
-        IF lv_found = abap_true AND lv_prev_sev IS NOT INITIAL AND ls_out-last_ok IS NOT INITIAL.
-          EXIT.
-        ENDIF.
-      ENDLOOP.
+          IF ls_m-msgty = 'S' AND ls_out-last_ok IS INITIAL.
+            ls_out-last_ok = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
+          ENDIF.
+
+          " Once we have latest, previous (for trend) and last_ok, we can stop for this port
+          IF lv_found = abap_true AND lv_prev_sev IS NOT INITIAL AND ls_out-last_ok IS NOT INITIAL.
+            EXIT.
+          ENDIF.
+        ENDLOOP.
+      ENDIF.
 
       ls_out-trend = map_trend( iv_latest = lv_latest_sev iv_prev = lv_prev_sev ).
 
