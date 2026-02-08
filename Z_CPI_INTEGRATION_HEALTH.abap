@@ -355,15 +355,15 @@ CLASS lcl_integration_health IMPLEMENTATION.
 
     ENDLOOP.
     LOOP AT lt_msg INTO ls_msg.
-        MOVE ls_msg-time_stmp TO inc_timestmp.
-        APPEND VALUE #( lp_name = ls_msg-msgv1
-                        msgty   = ls_msg-msgty
-                        datum   = inc_timestmp(8)
-                        uzeit   = inc_timestmp+8(6)
-                        result  = ls_msg-msgv2 && ',' && ls_msg-msgv3 && ',' && ls_msg-msgv4 ) TO lt_msg_full.
+      MOVE ls_msg-time_stmp TO inc_timestmp.
+      APPEND VALUE #( lp_name = ls_msg-msgv1
+                      msgty   = ls_msg-msgty
+                      datum   = inc_timestmp(8)
+                      uzeit   = inc_timestmp+8(6)
+                      result  = ls_msg-msgv2 && ',' && ls_msg-msgv3 && ',' && ls_msg-msgv4 ) TO lt_msg_full.
     ENDLOOP.
 
-    SORT lt_msg_full BY lp_name ascending datum descending uzeit descending.
+    SORT lt_msg_full BY lp_name ASCENDING datum DESCENDING uzeit DESCENDING.
 
     LOOP AT mt_ports INTO DATA(ls_port).
       DATA(ls_out) = VALUE ty_dashboard_out(
@@ -376,27 +376,33 @@ CLASS lcl_integration_health IMPLEMENTATION.
       DATA: lv_latest_sev TYPE symsgty,
             lv_prev_sev   TYPE symsgty,
             lv_found      TYPE abap_bool.
-
+      SORT lt_msg_full BY lp_name.
       LOOP AT lt_msg_full INTO DATA(ls_m) WHERE lp_name = ls_port-lp_name.
-        IF lv_found = abap_false.
+*        IF lv_found = abap_false.
+        DATA(ls_m_tmp) = ls_m.
+        lv_prev_sev = 'X'.
+        AT NEW lp_name.
+          ls_m = ls_m_tmp.
           lv_latest_sev = ls_m-msgty.
           ls_out-status = ls_m-result.
           ls_out-last_check = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
-          lv_found = abap_true.
+*          lv_found = abap_true.,
           CASE ls_m-msgty.
             WHEN 'S'. ls_out-light = '3'. " Green
             WHEN OTHERS. ls_out-light = '1'. " Red
           ENDCASE.
-        ELSEIF lv_prev_sev IS INITIAL.
+          CLEAR lv_prev_sev.
+        ENDAT.
+
+        IF lv_prev_sev IS NOT INITIAL.
           lv_prev_sev = ls_m-msgty.
         ENDIF.
-
         IF ls_m-msgty = 'S' AND ls_out-last_ok IS INITIAL.
           ls_out-last_ok = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
         ENDIF.
 
         " Once we have latest, previous (for trend) and last_ok, we can stop for this port
-        IF lv_found = abap_true AND lv_prev_sev IS NOT INITIAL AND ls_out-last_ok IS NOT INITIAL.
+        IF lv_found = abap_true AND lv_prev_sev <> 'X' AND ls_out-last_ok IS NOT INITIAL.
           EXIT.
         ENDIF.
       ENDLOOP.
@@ -480,7 +486,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
           lv_email        TYPE ad_smtpadr.
 
     SELECT SINGLE low FROM tvarvc INTO @lv_email
-      WHERE name = 'Z_API_ALERT_MAIL' AND type = 'P'.
+      WHERE name = 'Z_CPI_ALERT_MAIL' AND type = 'P'.
 
     IF lv_email IS INITIAL.
       RETURN.
@@ -488,7 +494,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
 
     TRY.
         lo_send_request = cl_bcs=>create_persistent( ).
-        APPEND |API Connectivity Alert: { is_port-lp_name }| TO lt_body.
+        APPEND |CPI Connectivity Alert: { is_port-lp_name }| TO lt_body.
         APPEND |Result: { iv_result }| TO lt_body.
         APPEND |Error: { iv_error }| TO lt_body.
         APPEND |Endpoint: { is_port-url }| TO lt_body.
@@ -496,7 +502,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
         lo_document = cl_document_bcs=>create_document(
                         i_type    = 'RAW'
                         i_text    = lt_body
-                        i_subject = |API Alert: { is_port-lp_name }| ).
+                        i_subject = |CPI Alert: { is_port-lp_name }| ).
         lo_send_request->set_document( lo_document ).
         lo_recipient = cl_cam_address_bcs=>create_internet_address( lv_email ).
         lo_send_request->add_recipient( lo_recipient ).
