@@ -1,25 +1,6 @@
 *&---------------------------------------------------------------------*
-*& Report Z_CPI_INTEGRATION_HEALTH
+*&  Include           Z_API_CLS_LOGIC
 *&---------------------------------------------------------------------*
-REPORT z_cpi_integration_health.
-
-TYPES: ty_status_text TYPE c LENGTH 128.
-DATA: it_srt TYPE TABLE OF srt_cfg_cli_asgn WITH HEADER LINE.
-*----------------------------------------------------------------------*
-* SELECTION SCREEN
-*----------------------------------------------------------------------*
-SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE text-t01.
-PARAMETERS: rb_mon  RADIOBUTTON GROUP g1 DEFAULT 'X' USER-COMMAND mode,
-            rb_dash RADIOBUTTON GROUP g1.
-SELECTION-SCREEN END OF BLOCK b1.
-
-SELECTION-SCREEN BEGIN OF BLOCK b2 WITH FRAME TITLE text-t02.
-SELECT-OPTIONS: s_serv FOR it_srt-proxy_class,
-                s_lp   FOR it_srt-lp_name.
-DATA: gv_stat_dummy TYPE ty_status_text.
-SELECT-OPTIONS: s_stat FOR gv_stat_dummy.
-SELECTION-SCREEN END OF BLOCK b2.
-
 *----------------------------------------------------------------------*
 * CLASS lcl_integration_health DEFINITION
 *----------------------------------------------------------------------*
@@ -446,12 +427,16 @@ CLASS lcl_integration_health IMPLEMENTATION.
   METHOD display_alv.
     DATA: lo_alv     TYPE REF TO cl_salv_table,
           lo_columns TYPE REF TO cl_salv_columns_table,
-          lo_column  TYPE REF TO cl_salv_column_table.
+          lo_column  TYPE REF TO cl_salv_column_table,
+          gr_funct TYPE REF TO cl_salv_functions.
 
     TRY.
         cl_salv_table=>factory(
           IMPORTING r_salv_table = lo_alv
           CHANGING  t_table      = mt_dashboard_out ).
+
+        gr_funct = lo_alv->get_functions( ).
+        gr_funct->set_all( ).
 
         lo_columns = lo_alv->get_columns( ).
         lo_columns->set_optimize( abap_true ).
@@ -486,7 +471,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
           lv_email        TYPE ad_smtpadr.
 
     SELECT SINGLE low FROM tvarvc INTO @lv_email
-      WHERE name = 'Z_CPI_ALERT_MAIL' AND type = 'P'.
+      WHERE name = 'Z_API_ALERT_MAIL' AND type = 'P'.
 
     IF lv_email IS INITIAL.
       RETURN.
@@ -494,7 +479,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
 
     TRY.
         lo_send_request = cl_bcs=>create_persistent( ).
-        APPEND |CPI Connectivity Alert: { is_port-lp_name }| TO lt_body.
+        APPEND |API Connectivity Alert: { is_port-service_name } { is_port-lp_name }| TO lt_body.
         APPEND |Result: { iv_result }| TO lt_body.
         APPEND |Error: { iv_error }| TO lt_body.
         APPEND |Endpoint: { is_port-url }| TO lt_body.
@@ -502,7 +487,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
         lo_document = cl_document_bcs=>create_document(
                         i_type    = 'RAW'
                         i_text    = lt_body
-                        i_subject = |CPI Alert: { is_port-lp_name }| ).
+                        i_subject = |API Alert: { is_port-lp_name }| ).
         lo_send_request->set_document( lo_document ).
         lo_recipient = cl_cam_address_bcs=>create_internet_address( lv_email ).
         lo_send_request->add_recipient( lo_recipient ).
@@ -512,6 +497,3 @@ CLASS lcl_integration_health IMPLEMENTATION.
     ENDTRY.
   ENDMETHOD.
 ENDCLASS.
-
-START-OF-SELECTION.
-  NEW lcl_integration_health( )->run( ).
