@@ -3,23 +3,21 @@
 *&---------------------------------------------------------------------*
 REPORT z_cpi_integration_health.
 
-TABLES: srt_lp.
-
-TYPES: ty_status_text TYPE c LENGTH 20.
-
+TYPES: ty_status_text TYPE c LENGTH 128.
+DATA: it_srt TYPE TABLE OF srt_cfg_cli_asgn WITH HEADER LINE.
 *----------------------------------------------------------------------*
 * SELECTION SCREEN
 *----------------------------------------------------------------------*
-SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE TEXT-t01.
-  PARAMETERS: rb_mon  RADIOBUTTON GROUP g1 DEFAULT 'X' USER-COMMAND mode,
-              rb_dash RADIOBUTTON GROUP g1.
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE text-t01.
+PARAMETERS: rb_mon  RADIOBUTTON GROUP g1 DEFAULT 'X' USER-COMMAND mode,
+            rb_dash RADIOBUTTON GROUP g1.
 SELECTION-SCREEN END OF BLOCK b1.
 
-SELECTION-SCREEN BEGIN OF BLOCK b2 WITH FRAME TITLE TEXT-t02.
-  SELECT-OPTIONS: s_serv FOR srt_lp-service_name,
-                  s_lp   FOR srt_lp-lp_name.
-  DATA: gv_stat_dummy TYPE ty_status_text.
-  SELECT-OPTIONS: s_stat FOR gv_stat_dummy.
+SELECTION-SCREEN BEGIN OF BLOCK b2 WITH FRAME TITLE text-t02.
+SELECT-OPTIONS: s_serv FOR it_srt-proxy_class,
+                s_lp   FOR it_srt-lp_name.
+DATA: gv_stat_dummy TYPE ty_status_text.
+SELECT-OPTIONS: s_stat FOR gv_stat_dummy.
 SELECTION-SCREEN END OF BLOCK b2.
 
 *----------------------------------------------------------------------*
@@ -31,15 +29,19 @@ CLASS lcl_integration_health DEFINITION.
 
   PRIVATE SECTION.
     TYPES: BEGIN OF ty_port,
-             lp_name      TYPE srt_lp-lp_name,
-             service_name TYPE srt_lp-service_name,
-             url          TYPE string,
+             lp_name      TYPE srt_cfg_cli_asgn-lp_name,
+             service_name TYPE srt_cfg_cli_asgn-proxy_class,
+             protocol     TYPE srt_cfg_cli_asgn-protocol,
+             host         TYPE srt_cfg_cli_asgn-host,
+             port         TYPE srt_cfg_cli_asgn-port,
+             url          TYPE srt_cfg_cli_asgn-url,
+*             url          TYPE string,
            END OF ty_port.
 
     TYPES: BEGIN OF ty_dashboard_out,
              light        TYPE c LENGTH 1,
-             service      TYPE srt_lp-service_name,
-             logical_port TYPE srt_lp-lp_name,
+             service      TYPE srt_cfg_cli_asgn-proxy_class,
+             logical_port TYPE srt_cfg_cli_asgn-lp_name,
              endpoint     TYPE string,
              status       TYPE ty_status_text,
              last_ok      TYPE string,
@@ -55,8 +57,8 @@ CLASS lcl_integration_health DEFINITION.
       run_monitoring,
       view_dashboard,
       ping_endpoint
-        IMPORTING iv_class  TYPE srt_lp-service_name
-                  iv_lp     TYPE srt_lp-lp_name
+        IMPORTING iv_class  TYPE srt_cfg_cli_asgn-proxy_class
+                  iv_lp     TYPE srt_cfg_cli_asgn-lp_name
         EXPORTING ev_status TYPE i
                   ev_error  TYPE string
                   ev_result TYPE ty_status_text,
@@ -74,8 +76,8 @@ CLASS lcl_integration_health DEFINITION.
                   iv_status TYPE i
                   iv_error  TYPE string,
       map_trend
-        IMPORTING iv_latest TYPE symsgty
-                  iv_prev   TYPE symsgty
+        IMPORTING iv_latest       TYPE symsgty
+                  iv_prev         TYPE symsgty
         RETURNING VALUE(rv_trend) TYPE string,
       display_alv.
 ENDCLASS.
@@ -94,11 +96,10 @@ CLASS lcl_integration_health IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD discover_ports.
-    SELECT lp_name, proxy_class AS service_name, url
+    SELECT lp_name, proxy_class AS service_name, url, host , port
       FROM srt_cfg_cli_asgn
       WHERE lp_name      IN @s_lp
         AND proxy_class  IN @s_serv
-        AND url          LIKE '%hana.ondemand.com%'
       INTO CORRESPONDING FIELDS OF TABLE @mt_ports.
   ENDMETHOD.
 
@@ -177,7 +178,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
           ls_msg     TYPE bal_s_msg,
           lt_handles TYPE bal_t_logh.
 
-    ls_log-object    = 'ZCPI_MON'.
+    ls_log-object    = 'ZSOA_MON'.
     ls_log-subobject = 'SOAP_CONN'.
     ls_log-aluser    = sy-uname.
     ls_log-alprog    = sy-repid.
@@ -199,7 +200,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
     ls_msg-msgv1 = is_port-lp_name.
     ls_msg-msgv2 = iv_result.
     ls_msg-msgv3 = |Status: { iv_status }|.
-    ls_msg-msgv4 = substring( val = iv_error len = min( val1 = strlen( iv_error ) val2 = 50 ) ).
+    ls_msg-msgv4 = iv_error.
 
     CASE iv_result.
       WHEN 'OK'.              ls_msg-msgty = 'S'.
@@ -226,13 +227,24 @@ CLASS lcl_integration_health IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD read_previous_state.
-    DATA: ls_filter TYPE bal_s_lfil,
-          lt_hdr    TYPE balhdr_t,
-          lt_msgs   TYPE bal_t_mscl.
+    DATA: ls_filter     TYPE bal_s_lfil,
+          ls_obj        TYPE bal_s_obj,
+          ls_sub        TYPE bal_s_sub,
+          lt_hdr        TYPE balhdr_t,
+          ls_hdr        TYPE balhdr,
+          lt_msg_handle TYPE bal_t_msgh,
+          ls_msg_handle TYPE balmsghndl,
+          ls_msg        TYPE bal_s_msg,
+          lt_log_header TYPE balhdr_t.
 
-    APPEND VALUE #( sign = 'I' option = 'EQ' low = 'ZCPI_MON' ) TO ls_filter-object.
-    APPEND VALUE #( sign = 'I' option = 'EQ' low = 'SOAP_CONN' ) TO ls_filter-subobject.
-    APPEND VALUE #( sign = 'I' option = 'GE' low = sy-datum - 30 ) TO ls_filter-aldate.
+    ls_obj-sign = 'I'. ls_obj-option = 'EQ'. ls_obj-low = 'ZSOA_MON'.
+    APPEND ls_obj TO ls_filter-object.
+    ls_sub-sign = 'I'. ls_sub-option = 'EQ'. ls_sub-low = 'SOAP_CONN'.
+    APPEND ls_sub TO ls_filter-subobject.
+
+    " Optimization: Search only logs from the last 30 days
+    DATA(lv_date_limit) = sy-datum - 30.
+    APPEND VALUE #( sign = 'I' option = 'GE' low = lv_date_limit ) TO ls_filter-aldate.
 
     CALL FUNCTION 'BAL_DB_SEARCH'
       EXPORTING
@@ -240,34 +252,63 @@ CLASS lcl_integration_health IMPLEMENTATION.
       IMPORTING
         e_t_log_header = lt_hdr
       EXCEPTIONS
-        OTHERS         = 1.
+        log_not_found  = 1
+        OTHERS         = 2.
 
     IF sy-subrc <> 0 OR lt_hdr IS INITIAL.
       RETURN.
     ENDIF.
 
-    SORT lt_hdr BY aldate DESC altime DESC.
+    LOOP AT lt_hdr INTO ls_hdr.
+      REFRESH: lt_log_header.
+      APPEND ls_hdr TO lt_log_header.
 
-    CALL FUNCTION 'BAL_DB_LOAD'
-      EXPORTING
-        i_t_log_header = lt_hdr
-      IMPORTING
-        e_t_msg        = lt_msgs
-      EXCEPTIONS
-        OTHERS         = 1.
+      CALL FUNCTION 'BAL_DB_LOAD'
+        EXPORTING
+          i_t_log_header = lt_log_header
+        IMPORTING
+          e_t_msg_handle = lt_msg_handle
+        EXCEPTIONS
+          OTHERS         = 1.
 
-    LOOP AT lt_msgs INTO DATA(ls_msg) WHERE msgv1 = iv_lp_name.
-      rv_prev_sev = ls_msg-msgty.
-      RETURN.
+      IF sy-subrc = 0.
+        LOOP AT lt_msg_handle INTO ls_msg_handle.
+          "get the message by reading through the log
+          CALL FUNCTION 'BAL_LOG_MSG_READ'
+            EXPORTING
+              i_s_msg_handle = ls_msg_handle
+            IMPORTING
+              e_s_msg        = ls_msg
+            EXCEPTIONS
+              log_not_found  = 1
+              msg_not_found  = 2
+              OTHERS         = 3.
+          IF sy-subrc = 0.
+            IF ls_msg-msgv1 = iv_lp_name.
+              rv_prev_sev = ls_msg-msgty.
+              RETURN.
+            ENDIF.
+          ENDIF.
+
+        ENDLOOP.
+      ENDIF.
     ENDLOOP.
   ENDMETHOD.
 
   METHOD view_dashboard.
-    DATA: ls_filter TYPE bal_s_lfil,
-          lt_hdr    TYPE balhdr_t,
-          lt_msgs   TYPE bal_t_mscl.
+    DATA: ls_filter     TYPE bal_s_lfil,
+          ls_obj        TYPE bal_s_obj,
+          ls_sub        TYPE bal_s_sub,
+          lt_hdr        TYPE balhdr_t,
+          ls_hdr        TYPE balhdr,
+          lt_msg_handle TYPE bal_t_msgh,
+          ls_msg_handle TYPE balmsghndl,
+          ls_msg        TYPE bal_s_msg,
+          lt_msg        TYPE TABLE OF bal_s_msg,
+          lt_log_header TYPE balhdr_t,
+          inc_timestmp  TYPE string.
 
-    APPEND VALUE #( sign = 'I' option = 'EQ' low = 'ZCPI_MON' ) TO ls_filter-object.
+    APPEND VALUE #( sign = 'I' option = 'EQ' low = 'ZSOA_MON' ) TO ls_filter-object.
     APPEND VALUE #( sign = 'I' option = 'EQ' low = 'SOAP_CONN' ) TO ls_filter-subobject.
     APPEND VALUE #( sign = 'I' option = 'GE' low = sy-datum - 30 ) TO ls_filter-aldate.
 
@@ -284,7 +325,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
         EXPORTING
           i_t_log_header = lt_hdr
         IMPORTING
-          e_t_msg        = lt_msgs
+          e_t_msg_handle = lt_msg_handle
         EXCEPTIONS
           OTHERS         = 1.
     ENDIF.
@@ -297,19 +338,32 @@ CLASS lcl_integration_health IMPLEMENTATION.
              result  TYPE ty_status_text,
            END OF ty_msg_full.
     DATA: lt_msg_full TYPE TABLE OF ty_msg_full.
-
-    LOOP AT lt_msgs INTO DATA(ls_msg).
-      READ TABLE lt_hdr INTO DATA(ls_hdr) WITH KEY lognumber = ls_msg-lognumber.
+    LOOP AT lt_msg_handle INTO ls_msg_handle.
+      "get the message by reading through the log
+      CALL FUNCTION 'BAL_LOG_MSG_READ'
+        EXPORTING
+          i_s_msg_handle = ls_msg_handle
+        IMPORTING
+          e_s_msg        = ls_msg
+        EXCEPTIONS
+          log_not_found  = 1
+          msg_not_found  = 2
+          OTHERS         = 3.
       IF sy-subrc = 0.
-        APPEND VALUE #( lp_name = ls_msg-msgv1
-                        msgty   = ls_msg-msgty
-                        datum   = ls_hdr-aldate
-                        uzeit   = ls_hdr-altime
-                        result  = ls_msg-msgv2 ) TO lt_msg_full.
+        APPEND ls_msg TO lt_msg.
       ENDIF.
+
+    ENDLOOP.
+    LOOP AT lt_msg INTO ls_msg.
+      MOVE ls_msg-time_stmp TO inc_timestmp.
+      APPEND VALUE #( lp_name = ls_msg-msgv1
+                      msgty   = ls_msg-msgty
+                      datum   = inc_timestmp(8)
+                      uzeit   = inc_timestmp+8(6)
+                      result  = ls_msg-msgv2 && ',' && ls_msg-msgv3 && ',' && ls_msg-msgv4 ) TO lt_msg_full.
     ENDLOOP.
 
-    SORT lt_msg_full BY lp_name ASC datum DESC uzeit DESC.
+    SORT lt_msg_full BY lp_name ASCENDING datum DESCENDING uzeit DESCENDING.
 
     DATA: lv_latest_sev TYPE symsgty,
           lv_prev_sev   TYPE symsgty,
@@ -322,43 +376,41 @@ CLASS lcl_integration_health IMPLEMENTATION.
         logical_port = ls_port-lp_name
         endpoint     = ls_port-url
         status       = 'UNKNOWN'
-        light        = '2' ).
+        light        = ' ' ).
 
-      CLEAR: lv_latest_sev, lv_prev_sev, lv_found.
+      DATA: lv_latest_sev TYPE symsgty,
+            lv_prev_sev   TYPE symsgty,
+            lv_found      TYPE abap_bool.
+      SORT lt_msg_full BY lp_name.
+      LOOP AT lt_msg_full INTO DATA(ls_m) WHERE lp_name = ls_port-lp_name.
+*        IF lv_found = abap_false.
+        DATA(ls_m_tmp) = ls_m.
+        lv_prev_sev = 'X'.
+        AT NEW lp_name.
+          ls_m = ls_m_tmp.
+          lv_latest_sev = ls_m-msgty.
+          ls_out-status = ls_m-result.
+          ls_out-last_check = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
+*          lv_found = abap_true.,
+          CASE ls_m-msgty.
+            WHEN 'S'. ls_out-light = '3'. " Green
+            WHEN OTHERS. ls_out-light = '1'. " Red
+          ENDCASE.
+          CLEAR lv_prev_sev.
+        ENDAT.
 
-      " Optimized lookup in sorted history table
-      READ TABLE lt_msg_full WITH KEY lp_name = ls_port-lp_name
-           BINARY SEARCH TRANSPORTING NO FIELDS.
-      IF sy-subrc = 0.
-        lv_index = sy-tabix.
-        LOOP AT lt_msg_full INTO DATA(ls_m) FROM lv_index.
-          IF ls_m-lp_name <> ls_port-lp_name.
-            EXIT.
-          ENDIF.
+        IF lv_prev_sev IS NOT INITIAL.
+          lv_prev_sev = ls_m-msgty.
+        ENDIF.
+        IF ls_m-msgty = 'S' AND ls_out-last_ok IS INITIAL.
+          ls_out-last_ok = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
+        ENDIF.
 
-          IF lv_found = abap_false.
-            lv_latest_sev = ls_m-msgty.
-            ls_out-status = ls_m-result.
-            ls_out-last_check = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
-            lv_found = abap_true.
-            CASE ls_m-msgty.
-              WHEN 'S'. ls_out-light = '3'. " Green
-              WHEN OTHERS. ls_out-light = '1'. " Red
-            ENDCASE.
-          ELSEIF lv_prev_sev IS INITIAL.
-            lv_prev_sev = ls_m-msgty.
-          ENDIF.
-
-          IF ls_m-msgty = 'S' AND ls_out-last_ok IS INITIAL.
-            ls_out-last_ok = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
-          ENDIF.
-
-          " Once we have latest, previous (for trend) and last_ok, we can stop for this port
-          IF lv_found = abap_true AND lv_prev_sev IS NOT INITIAL AND ls_out-last_ok IS NOT INITIAL.
-            EXIT.
-          ENDIF.
-        ENDLOOP.
-      ENDIF.
+        " Once we have latest, previous (for trend) and last_ok, we can stop for this port
+        IF lv_found = abap_true AND lv_prev_sev <> 'X' AND ls_out-last_ok IS NOT INITIAL.
+          EXIT.
+        ENDIF.
+      ENDLOOP.
 
       ls_out-trend = map_trend( iv_latest = lv_latest_sev iv_prev = lv_prev_sev ).
 
@@ -397,9 +449,9 @@ CLASS lcl_integration_health IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD display_alv.
-    DATA: lo_alv      TYPE REF TO cl_salv_table,
-          lo_columns  TYPE REF TO cl_salv_columns_table,
-          lo_column   TYPE REF TO cl_salv_column_table.
+    DATA: lo_alv     TYPE REF TO cl_salv_table,
+          lo_columns TYPE REF TO cl_salv_columns_table,
+          lo_column  TYPE REF TO cl_salv_column_table.
 
     TRY.
         cl_salv_table=>factory(
