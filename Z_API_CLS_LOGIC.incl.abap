@@ -23,6 +23,8 @@ CLASS lcl_integration_health DEFINITION.
              light        TYPE c LENGTH 1,
              service      TYPE srt_cfg_cli_asgn-proxy_class,
              logical_port TYPE srt_cfg_cli_asgn-lp_name,
+             protocol     TYPE srt_cfg_cli_asgn-protocol,
+             host         TYPE srt_cfg_cli_asgn-host,
              endpoint     TYPE string,
              status       TYPE ty_status_text,
              last_ok      TYPE string,
@@ -43,11 +45,15 @@ CLASS lcl_integration_health DEFINITION.
         EXPORTING ev_status TYPE i
                   ev_error  TYPE string
                   ev_result TYPE ty_status_text,
+      bal_log_create
+        EXPORTING
+          ev_log_handle TYPE balloghndl,
       log_to_bal
-        IMPORTING is_port   TYPE ty_port
-                  iv_result TYPE ty_status_text
-                  iv_status TYPE i
-                  iv_error  TYPE string,
+        IMPORTING is_port       TYPE ty_port
+                  iv_result     TYPE ty_status_text
+                  iv_status     TYPE i
+                  iv_error      TYPE string
+                  iv_log_handle TYPE balloghndl,
       read_previous_state
         IMPORTING iv_lp_name         TYPE srt_lp-lp_name
         RETURNING VALUE(rv_prev_sev) TYPE bal_s_msg-msgty,
@@ -77,7 +83,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD discover_ports.
-    SELECT lp_name, proxy_class AS service_name, url, host , port
+    SELECT lp_name, proxy_class AS service_name, url, host , port, protocol
       FROM srt_cfg_cli_asgn
       WHERE lp_name      IN @s_lp
         AND proxy_class  IN @s_serv
@@ -85,11 +91,16 @@ CLASS lcl_integration_health IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD run_monitoring.
-    DATA: lv_status TYPE i,
-          lv_error  TYPE string,
-          lv_result TYPE ty_status_text,
-          lv_prev   TYPE bal_s_msg-msgty,
-          lv_curr   TYPE bal_s_msg-msgty.
+    DATA: lv_status     TYPE i,
+          lv_error      TYPE string,
+          lv_result     TYPE ty_status_text,
+          lv_prev       TYPE bal_s_msg-msgty,
+          lv_curr       TYPE bal_s_msg-msgty,
+          lv_log_handle TYPE balloghndl.
+
+    bal_log_create(
+      IMPORTING ev_log_handle  = lv_log_handle
+    ).
 
     LOOP AT mt_ports INTO DATA(ls_port).
       ping_endpoint(
@@ -105,7 +116,8 @@ CLASS lcl_integration_health IMPLEMENTATION.
         is_port   = ls_port
         iv_result = lv_result
         iv_status = lv_status
-        iv_error  = lv_error ).
+        iv_error  = lv_error
+        iv_log_handle = lv_log_handle ).
 
       " Map result to severity for alert check
       CASE lv_result.
@@ -124,7 +136,23 @@ CLASS lcl_integration_health IMPLEMENTATION.
           iv_error  = lv_error ).
       ENDIF.
     ENDLOOP.
-    MESSAGE 'Monitoring completed.' TYPE 'S'.
+    MESSAGE 'Monitoring completed.' TYPE 'S' DISPLAY LIKE 'I'.
+  ENDMETHOD.
+
+  METHOD bal_log_create.
+    DATA: ls_log     TYPE bal_s_log.
+    ls_log-object    = 'ZSOA_MON'.
+    ls_log-subobject = 'SOAP_CONN'.
+    ls_log-aluser    = sy-uname.
+    ls_log-alprog    = sy-repid.
+
+    CALL FUNCTION 'BAL_LOG_CREATE'
+      EXPORTING
+        i_s_log      = ls_log
+      IMPORTING
+        e_log_handle = ev_log_handle
+      EXCEPTIONS
+        OTHERS       = 1.
   ENDMETHOD.
 
   METHOD ping_endpoint.
@@ -154,27 +182,8 @@ CLASS lcl_integration_health IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD log_to_bal.
-    DATA: ls_log     TYPE bal_s_log,
-          lv_handle  TYPE balloghndl,
-          ls_msg     TYPE bal_s_msg,
+    DATA: ls_msg     TYPE bal_s_msg,
           lt_handles TYPE bal_t_logh.
-
-    ls_log-object    = 'ZSOA_MON'.
-    ls_log-subobject = 'SOAP_CONN'.
-    ls_log-aluser    = sy-uname.
-    ls_log-alprog    = sy-repid.
-
-    CALL FUNCTION 'BAL_LOG_CREATE'
-      EXPORTING
-        i_s_log      = ls_log
-      IMPORTING
-        e_log_handle = lv_handle
-      EXCEPTIONS
-        OTHERS       = 1.
-
-    IF sy-subrc <> 0.
-      RETURN.
-    ENDIF.
 
     ls_msg-msgid = '00'.
     ls_msg-msgno = '001'.
@@ -192,12 +201,12 @@ CLASS lcl_integration_health IMPLEMENTATION.
 
     CALL FUNCTION 'BAL_LOG_MSG_ADD'
       EXPORTING
-        i_log_handle = lv_handle
+        i_log_handle = iv_log_handle
         i_s_msg      = ls_msg
       EXCEPTIONS
         OTHERS       = 1.
 
-    APPEND lv_handle TO lt_handles.
+    APPEND iv_log_handle TO lt_handles.
     CALL FUNCTION 'BAL_DB_SAVE'
       EXPORTING
         i_t_log_handle = lt_handles
@@ -351,6 +360,8 @@ CLASS lcl_integration_health IMPLEMENTATION.
         service      = ls_port-service_name
         logical_port = ls_port-lp_name
         endpoint     = ls_port-url
+        host         = ls_port-host
+        protocol     = ls_port-protocol
         status       = 'UNKNOWN'
         light        = ' ' ).
 
@@ -428,7 +439,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
     DATA: lo_alv     TYPE REF TO cl_salv_table,
           lo_columns TYPE REF TO cl_salv_columns_table,
           lo_column  TYPE REF TO cl_salv_column_table,
-          gr_funct TYPE REF TO cl_salv_functions.
+          gr_funct   TYPE REF TO cl_salv_functions.
 
     TRY.
         cl_salv_table=>factory(
@@ -457,6 +468,10 @@ CLASS lcl_integration_health IMPLEMENTATION.
         lo_column->set_long_text( 'Last OK' ).
         lo_column ?= lo_columns->get_column( 'ENDPOINT' ).
         lo_column->set_long_text( 'Target Endpoint' ).
+        lo_column ?= lo_columns->get_column( 'HOST' ).
+        lo_column->set_long_text( 'Host Name' ).
+        lo_column ?= lo_columns->get_column( 'PROTOCOL' ).
+        lo_column->set_long_text( 'Protocol Name' ).
 
         lo_alv->display( ).
       CATCH cx_salv_msg.
