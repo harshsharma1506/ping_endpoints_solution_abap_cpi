@@ -41,3 +41,20 @@ The project involved a significant refactoring and consolidation of legacy monit
     *   `↓`: Service has degraded or is repeatedly failing.
     *   `→`: Service status remains unchanged (Stable).
 5.  **Dynamic Filtering:** Selection screen filters allow users to narrow down the dashboard view by Service Name, Logical Port, or specific Health Status.
+
+## Some censored snapshots 😉
+
+### Selection screen 
+<img width="638" height="175" alt="{18A6C6D0-B5ED-4EF4-9E63-EA73A93F1095}" src="https://github.com/user-attachments/assets/a0c8c68e-8d17-48c6-b61a-461b4d6fb0f9" />
+
+### SLG1 logs if ping fails during monitoring
+<img width="910" height="277" alt="{9156F470-3EA4-416B-BAF1-D37358ADADA6}" src="https://github.com/user-attachments/assets/6c82e1de-4b83-448b-a6b3-2b26c765bd56" />
+
+### Mail sent for the failed services by reading the BAL logs 
+<img width="682" height="170" alt="{3CE15ED8-352C-4FE0-A742-63BB333B6870}" src="https://github.com/user-attachments/assets/d1addb06-8098-4858-b1ed-23c58952cc6b" />
+
+### ALV report for seeing trend and diagnose
+<img width="905" height="153" alt="{C4059B0C-961C-449B-9CB6-73B6E2B17CB4}" src="https://github.com/user-attachments/assets/70f88371-8374-4fc7-b2fd-8fad0344068a" />
+
+
+
