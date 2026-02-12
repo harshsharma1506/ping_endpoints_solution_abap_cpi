@@ -338,7 +338,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
     ENDIF.
 
     TYPES: BEGIN OF ty_msg_full,
-             lp_name    TYPE srt_lp-lp_name,
+             lp_name1   TYPE srt_lp-lp_name,
              proxy_name TYPE srt_cfg_cli_asgn-proxy_class,
              msgty      TYPE symsgty,
              datum      TYPE aldate,
@@ -362,9 +362,10 @@ CLASS lcl_integration_health IMPLEMENTATION.
       ENDIF.
 
     ENDLOOP.
+    DELETE lt_msg WHERE msgv1 NOT IN s_lp OR msgv2 NOT IN s_serv.
     LOOP AT lt_msg INTO ls_msg.
       MOVE ls_msg-time_stmp TO inc_timestmp.
-      APPEND VALUE #( lp_name = ls_msg-msgv1
+      APPEND VALUE #( lp_name1 = ls_msg-msgv1
                       proxy_name = ls_msg-msgv2
                       msgty   = ls_msg-msgty
                       datum   = inc_timestmp(8)
@@ -372,7 +373,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
                       result  = ls_msg-msgv2 && ',' && ls_msg-msgv3 && ',' && ls_msg-msgv4 ) TO lt_msg_full.
     ENDLOOP.
 
-    SORT lt_msg_full BY lp_name ASCENDING proxy_name ASCENDING datum DESCENDING uzeit DESCENDING.
+    SORT lt_msg_full BY lp_name1 ASCENDING proxy_name ASCENDING datum DESCENDING uzeit DESCENDING.
 
     LOOP AT mt_ports INTO DATA(ls_port).
       DATA(ls_out) = VALUE ty_dashboard_out(
@@ -386,26 +387,26 @@ CLASS lcl_integration_health IMPLEMENTATION.
 
       DATA: lv_latest_sev TYPE symsgty,
             lv_prev_sev   TYPE symsgty,
-            lv_found      TYPE abap_bool.
-      SORT lt_msg_full BY lp_name.
-      LOOP AT lt_msg_full INTO DATA(ls_m) WHERE lp_name = ls_port-lp_name AND proxy_name = ls_port-service_name. "this  will run only twice per entry
+            lv_found      TYPE abap_bool,
+            lv_prev_lp    TYPE srt_lp-lp_name.
+      SORT lt_msg_full BY lp_name1.
+      LOOP AT lt_msg_full INTO DATA(ls_m) WHERE lp_name1 = ls_port-lp_name AND proxy_name = ls_port-service_name. "this  will run only twice per entry
 *        IF lv_found = abap_false.
         DATA(ls_m_tmp) = ls_m.
         lv_prev_sev = 'X'.
         DATA(l_flg_prx) = 'X'.
-
-        AT NEW lp_name.
-          ls_m = ls_m_tmp.
+        ls_m = ls_m_tmp.
+        IF ls_m-lp_name1 <> lv_prev_lp.
           lv_latest_sev = ls_m-msgty.
-          ls_out-status = ls_m-result.
-          ls_out-last_check = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
-*          lv_found = abap_true.,
-          CASE ls_m-msgty.
-            WHEN 'S'. ls_out-light = '3'. " Green
-            WHEN OTHERS. ls_out-light = '1'. " Red
-          ENDCASE.
           CLEAR lv_prev_sev.
-        ENDAT.
+        ENDIF.
+        ls_out-status = ls_m-result.
+        ls_out-last_check = |{ ls_m-datum DATE = ENVIRONMENT } { ls_m-uzeit TIME = ENVIRONMENT }|.
+*          lv_found = abap_true.,
+        CASE lv_latest_sev.
+          WHEN 'S'. ls_out-light = '3'. " Green
+          WHEN OTHERS. ls_out-light = '1'. " Red
+        ENDCASE.
 
         IF lv_prev_sev IS NOT INITIAL.
           lv_prev_sev = ls_m-msgty.
@@ -418,6 +419,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
         IF lv_found = abap_true AND lv_prev_sev <> 'X' AND ls_out-last_ok IS NOT INITIAL.
           EXIT.
         ENDIF.
+        lv_prev_lp = ls_m-lp_name1.
       ENDLOOP.
 
       ls_out-trend = map_trend( iv_latest = lv_latest_sev iv_prev = lv_prev_sev ).
