@@ -6,7 +6,16 @@
 *----------------------------------------------------------------------*
 CLASS lcl_integration_health DEFINITION.
   PUBLIC SECTION.
-    METHODS: run.
+    METHODS: run,
+      ping_endpoint
+        IMPORTING iv_class  TYPE srt_cfg_cli_asgn-proxy_class
+                  iv_lp     TYPE srt_cfg_cli_asgn-lp_name
+        EXPORTING ev_status TYPE i
+                  ev_error  TYPE string
+                  ev_result TYPE ty_status_text,
+      on_link_click FOR EVENT link_click  "Hotspot Handler
+                  OF cl_salv_events_table
+        IMPORTING row column.
 
   PRIVATE SECTION.
     TYPES: BEGIN OF ty_port,
@@ -39,12 +48,6 @@ CLASS lcl_integration_health DEFINITION.
       discover_ports,
       run_monitoring,
       view_dashboard,
-      ping_endpoint
-        IMPORTING iv_class  TYPE srt_cfg_cli_asgn-proxy_class
-                  iv_lp     TYPE srt_cfg_cli_asgn-lp_name
-        EXPORTING ev_status TYPE i
-                  ev_error  TYPE string
-                  ev_result TYPE ty_status_text,
       bal_log_create
         EXPORTING
           ev_log_handle TYPE balloghndl,
@@ -56,6 +59,7 @@ CLASS lcl_integration_health DEFINITION.
                   iv_log_handle TYPE balloghndl,
       read_previous_state
         IMPORTING iv_lp_name         TYPE srt_lp-lp_name
+                  iv_proxy_name      TYPE srt_cfg_cli_asgn-proxy_class
         RETURNING VALUE(rv_prev_sev) TYPE bal_s_msg-msgty,
       send_alert_mail
         IMPORTING is_port   TYPE ty_port
@@ -110,7 +114,9 @@ CLASS lcl_integration_health IMPLEMENTATION.
                   ev_error  = lv_error
                   ev_result = lv_result ).
 
-      lv_prev = read_previous_state( ls_port-lp_name ).
+      lv_prev = read_previous_state( EXPORTING
+        iv_lp_name = ls_port-lp_name
+        iv_proxy_name = ls_port-service_name ).
 
       log_to_bal(
         is_port   = ls_port
@@ -184,7 +190,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
   METHOD log_to_bal.
     DATA: ls_msg     TYPE bal_s_msg,
           lt_handles TYPE bal_t_logh,
-          lv_offset TYPE i.
+          lv_offset  TYPE i.
 
     DATA(lv_len) = strlen( iv_error ).
     FIND FIRST OCCURRENCE OF '(' IN iv_error MATCH OFFSET lv_offset.
@@ -195,10 +201,10 @@ CLASS lcl_integration_health IMPLEMENTATION.
     ls_msg-msgv2 = is_port-service_name.
     ls_msg-msgv3 = | Status: { iv_status } |.
     IF lv_len > 15.
-    IF lv_rem > 50.
-     lv_rem = 50.
-    ENDIF.
-    ls_msg-msgv4 = iv_error+lv_offset(lv_rem).
+      IF lv_rem > 50.
+        lv_rem = 50.
+      ENDIF.
+      ls_msg-msgv4 = iv_error+lv_offset(lv_rem).
     ELSE.
       ls_msg-msgv4 = iv_error.
     ENDIF.
@@ -285,7 +291,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
               msg_not_found  = 2
               OTHERS         = 3.
           IF sy-subrc = 0.
-            IF ls_msg-msgv1 CS iv_lp_name.
+            IF ls_msg-msgv1 = iv_lp_name AND ls_msg-msgv2 = iv_proxy_name.
               rv_prev_sev = ls_msg-msgty.
               RETURN.
             ENDIF.
@@ -332,11 +338,12 @@ CLASS lcl_integration_health IMPLEMENTATION.
     ENDIF.
 
     TYPES: BEGIN OF ty_msg_full,
-             lp_name TYPE srt_lp-lp_name,
-             msgty   TYPE symsgty,
-             datum   TYPE aldate,
-             uzeit   TYPE altime,
-             result  TYPE ty_status_text,
+             lp_name    TYPE srt_lp-lp_name,
+             proxy_name TYPE srt_cfg_cli_asgn-proxy_class,
+             msgty      TYPE symsgty,
+             datum      TYPE aldate,
+             uzeit      TYPE altime,
+             result     TYPE ty_status_text,
            END OF ty_msg_full.
     DATA: lt_msg_full TYPE TABLE OF ty_msg_full.
     LOOP AT lt_msg_handle INTO ls_msg_handle.
@@ -358,13 +365,14 @@ CLASS lcl_integration_health IMPLEMENTATION.
     LOOP AT lt_msg INTO ls_msg.
       MOVE ls_msg-time_stmp TO inc_timestmp.
       APPEND VALUE #( lp_name = ls_msg-msgv1
+                      proxy_name = ls_msg-msgv2
                       msgty   = ls_msg-msgty
                       datum   = inc_timestmp(8)
                       uzeit   = inc_timestmp+8(6)
                       result  = ls_msg-msgv2 && ',' && ls_msg-msgv3 && ',' && ls_msg-msgv4 ) TO lt_msg_full.
     ENDLOOP.
 
-    SORT lt_msg_full BY lp_name ASCENDING datum DESCENDING uzeit DESCENDING.
+    SORT lt_msg_full BY lp_name ASCENDING proxy_name ASCENDING datum DESCENDING uzeit DESCENDING.
 
     LOOP AT mt_ports INTO DATA(ls_port).
       DATA(ls_out) = VALUE ty_dashboard_out(
@@ -380,10 +388,12 @@ CLASS lcl_integration_health IMPLEMENTATION.
             lv_prev_sev   TYPE symsgty,
             lv_found      TYPE abap_bool.
       SORT lt_msg_full BY lp_name.
-      LOOP AT lt_msg_full INTO DATA(ls_m) WHERE lp_name = ls_port-lp_name.
+      LOOP AT lt_msg_full INTO DATA(ls_m) WHERE lp_name = ls_port-lp_name AND proxy_name = ls_port-service_name. "this  will run only twice per entry
 *        IF lv_found = abap_false.
         DATA(ls_m_tmp) = ls_m.
         lv_prev_sev = 'X'.
+        DATA(l_flg_prx) = 'X'.
+
         AT NEW lp_name.
           ls_m = ls_m_tmp.
           lv_latest_sev = ls_m-msgty.
@@ -411,10 +421,9 @@ CLASS lcl_integration_health IMPLEMENTATION.
       ENDLOOP.
 
       ls_out-trend = map_trend( iv_latest = lv_latest_sev iv_prev = lv_prev_sev ).
-
       APPEND ls_out TO mt_dashboard_out.
     ENDLOOP.
-
+    MESSAGE: 'To ping the service here, double click on Logical Ports' TYPE 'I'.
     display_alv( ).
   ENDMETHOD.
 
@@ -449,6 +458,8 @@ CLASS lcl_integration_health IMPLEMENTATION.
           lo_columns TYPE REF TO cl_salv_columns_table,
           lo_column  TYPE REF TO cl_salv_column_table,
           gr_funct   TYPE REF TO cl_salv_functions.
+    DATA: lo_events TYPE REF TO cl_salv_events_table.
+
 
     TRY.
         cl_salv_table=>factory(
@@ -457,13 +468,18 @@ CLASS lcl_integration_health IMPLEMENTATION.
 
         gr_funct = lo_alv->get_functions( ).
         gr_funct->set_all( ).
+*   all events
+        lo_events = lo_alv->get_event( ).
 
+*   event handler
+        SET HANDLER me->on_link_click FOR lo_events.
         lo_columns = lo_alv->get_columns( ).
         lo_columns->set_optimize( abap_true ).
         lo_columns->set_exception_column( 'LIGHT' ).
 
         lo_column ?= lo_columns->get_column( 'LOGICAL_PORT' ).
         lo_column->set_long_text( 'Logical Port' ).
+        lo_column->set_cell_type( if_salv_c_cell_type=>hotspot ).
         lo_column ?= lo_columns->get_column( 'SERVICE' ).
         lo_column->set_long_text( 'Service Name' ).
         lo_column ?= lo_columns->get_column( 'TREND' ).
@@ -486,7 +502,22 @@ CLASS lcl_integration_health IMPLEMENTATION.
       CATCH cx_salv_msg.
     ENDTRY.
   ENDMETHOD.
-
+  METHOD on_link_click.
+    DATA display_err TYPE string.
+    READ TABLE mt_dashboard_out INTO DATA(ls_out) INDEX row.
+    IF sy-subrc = 0.
+      IF ls_out IS NOT INITIAL AND column = 'LOGICAL_PORT'.
+        ping_endpoint(
+         EXPORTING
+           iv_lp = ls_out-logical_port
+           iv_class = ls_out-service
+         IMPORTING
+           ev_error = display_err
+         ).
+        MESSAGE display_err TYPE 'I'.
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.
   METHOD send_alert_mail.
     DATA: lo_send_request TYPE REF TO cl_bcs,
           lo_document     TYPE REF TO cl_document_bcs,
@@ -511,7 +542,7 @@ CLASS lcl_integration_health IMPLEMENTATION.
         lo_document = cl_document_bcs=>create_document(
                         i_type    = 'RAW'
                         i_text    = lt_body
-                        i_subject = |API Alert: { is_port-lp_name }| ).
+                        i_subject = |API Alert: Consumer Proxy: { is_port-service_name } Logical Port: { is_port-lp_name }| ).
         lo_send_request->set_document( lo_document ).
         lo_recipient = cl_cam_address_bcs=>create_internet_address( lv_email ).
         lo_send_request->add_recipient( lo_recipient ).
