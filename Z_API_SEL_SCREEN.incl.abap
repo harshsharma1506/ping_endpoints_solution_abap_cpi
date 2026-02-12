@@ -10,8 +10,8 @@ PARAMETERS: rb_mon  RADIOBUTTON GROUP g1 DEFAULT 'X' USER-COMMAND mode,
 SELECTION-SCREEN END OF BLOCK b1.
 
 SELECTION-SCREEN BEGIN OF BLOCK b2 WITH FRAME TITLE text-t02.
-SELECT-OPTIONS: s_serv FOR it_srt-proxy_class,
-                s_lp   FOR it_srt-lp_name.
-DATA: gv_stat_dummy TYPE ty_status_text.
-SELECT-OPTIONS: s_stat FOR gv_stat_dummy NO-DISPLAY.
+SELECT-OPTIONS: s_serv FOR it_srt-proxy_class NO-EXTENSION,
+                s_lp   FOR it_srt-lp_name NO-EXTENSION.
+*DATA: gv_stat_dummy TYPE ty_status_text.
+*SELECT-OPTIONS: s_stat FOR gv_stat_dummy NO-DISPLAY.
 SELECTION-SCREEN END OF BLOCK b2.
